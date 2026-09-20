@@ -1,6 +1,6 @@
 # X Business IT
 
-Цифровая платформа [**X Business Club**](https://xbusinessclub.ru/) — клуба предпринимателей НИУ ВШЭ — Санкт-Петербург.
+Цифровая платформа [**X Business Club**](https://xbusinessclub.ru/).
 
 Мы строим экосистему для мероприятий, нетворкинга и сообщества: от регистрации и чек-ина до мобильных приложений и Telegram Mini App.
 
@@ -18,6 +18,15 @@
 
 ---
 
+### Приложения
+
+- [App Store (iOS)](https://apps.apple.com/ru/app/x-business-club/id6790368195)
+- [Google Play (Android)](https://play.google.com/store/apps/details?id=ru.hsespbclub.app)
+- Сайт: [xbusinessclub.ru](https://xbusinessclub.ru/)
+- Умная ссылка на приложение: [xbusinessclub.ru/app](https://xbusinessclub.ru/app)
+
+---
+
 ### Стек
 
 - **Backend** — микросервисы (Gateway, Profiles, Events, Contacts, Random Coffee и др.)
@@ -29,12 +38,4 @@
 
 ---
 
-### Ссылки
-
-- Сайт: [xbusinessclub.ru](https://xbusinessclub.ru/)
-- API: [api.xbusinessclub.ru](https://api.xbusinessclub.ru/)
-
----
-
-> Репозитории организации — исходники платформы X Business Club.  
-> Вопросы по продукту и участию в клубе — через сайт и Telegram-каналы клуба.
+> Репозитории организации — исходники платформы X Business Club.
