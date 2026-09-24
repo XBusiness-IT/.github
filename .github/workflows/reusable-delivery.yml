@@ -1,0 +1,140 @@
+# Reusable delivery: main -> immutable images in GHCR -> QA deploy request.
+#
+# Called from a product repo's delivery.yml AFTER its CI passed on main.
+# 1. main-guard: the commit must come from a PR merged by a release manager
+# 2. build every image once, push ghcr.io/xbusiness-it/<name>:sha-<sha> (+ :main)
+# 3. send repository_dispatch "deploy-qa" to ci-cd-repo with image digests
+# Production never reacts to main: it is deployed only from an infra release prod-v*.
+name: Delivery (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      images:
+        description: >
+          JSON list of images: [{"var": "GATEWAY_IMAGE", "name": "gateway", "context": "gateway",
+          "dockerfile": "gateway/Dockerfile", "target": "", "build_env": ""}].
+          build_env qa|prod takes build args (KEY=VALUE lines) from secret BUILD_ENV_QA / BUILD_ENV_PROD.
+        type: string
+        required: true
+      managers:
+        type: string
+        default: dym-dino
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: read
+
+concurrency:
+  group: delivery-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      pr: ${{ steps.guard.outputs.pr-number }}
+      title: ${{ steps.guard.outputs.pr-title }}
+    steps:
+      - id: guard
+        uses: XBusiness-IT/.github/actions/main-guard@main
+        with:
+          managers: ${{ inputs.managers }}
+
+  build:
+    needs: guard
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        image: ${{ fromJSON(inputs.images) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: meta
+        env:
+          NAME: ${{ matrix.image.name }}
+          VARIANT: ${{ matrix.image.build_env }}
+        run: |
+          repo="ghcr.io/xbusiness-it/${NAME}"
+          suffix="${VARIANT:+-$VARIANT}"
+          {
+            echo "repo=$repo"
+            echo "tag=sha-${GITHUB_SHA}${suffix}"
+            echo "tags<<__EOF__"
+            echo "$repo:sha-${GITHUB_SHA}${suffix}"
+            echo "$repo:main${suffix}"
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.image.context }}
+          file: ${{ matrix.image.dockerfile }}
+          target: ${{ matrix.image.target }}
+          build-args: ${{ matrix.image.build_env && secrets[format('BUILD_ENV_{0}', matrix.image.build_env == 'qa' && 'QA' || 'PROD')] || '' }}
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.image.var }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.var }}
+      - name: Record digest
+        env:
+          VAR: ${{ matrix.image.var }}
+          REF: ${{ steps.meta.outputs.repo }}:${{ steps.meta.outputs.tag }}@${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p digests
+          echo "${VAR}=${REF}" > "digests/${VAR}.env"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: digest-${{ matrix.image.var }}
+          path: digests/${{ matrix.image.var }}.env
+          retention-days: 7
+
+  request-qa-deploy:
+    needs: [guard, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+      - name: Dispatch deploy-qa to ci-cd-repo
+        env:
+          TOKEN: ${{ secrets.CICD_REPO_TOKEN }}
+          PR: ${{ needs.guard.outputs.pr }}
+          TITLE: ${{ needs.guard.outputs.title }}
+        run: |
+          set -euo pipefail
+          test -n "$TOKEN" || { echo "::error::CICD_REPO_TOKEN is not configured"; exit 1; }
+          cat digests/*.env | sort
+          payload="$(python3 - <<'PY'
+          import glob, json, os
+          images = {}
+          for path in sorted(glob.glob("digests/*.env")):
+              key, _, value = open(path).read().strip().partition("=")
+              images[key] = value
+          print(json.dumps({"event_type": "deploy-qa", "client_payload": {
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "sha": os.environ["GITHUB_SHA"],
+              "pr": os.environ.get("PR", ""),
+              "title": os.environ.get("TITLE", ""),
+              "images": images,
+          }}))
+          PY
+          )"
+          curl --fail-with-body --silent --show-error --retry 3 \
+            -X POST "https://api.github.com/repos/XBusiness-IT/ci-cd-repo/dispatches" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "$payload"

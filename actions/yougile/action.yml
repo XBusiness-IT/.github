@@ -1,0 +1,35 @@
+name: YouGile
+description: Validate PR task references and mirror PR events into YouGile task chats.
+
+inputs:
+  command:
+    description: check | pr-event | message
+    required: true
+  task:
+    description: Task code for the message command (XIT-123)
+    required: false
+    default: ""
+  text:
+    description: Text for the message command
+    required: false
+    default: ""
+  api-key:
+    description: secrets.YOUGILE_API_KEY (technical user, access to the X-IT board only)
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        YOUGILE_API_KEY: ${{ inputs.api-key }}
+        YG_TASK: ${{ inputs.task }}
+        YG_TEXT: ${{ inputs.text }}
+      run: |
+        if [[ "${{ inputs.command }}" == "message" ]]; then
+          if [[ -z "$YOUGILE_API_KEY" || -z "$YG_TASK" ]]; then echo "YouGile message skipped"; exit 0; fi
+          python3 "${{ github.action_path }}/yougile.py" message --task "$YG_TASK" --text "$YG_TEXT"
+        else
+          python3 "${{ github.action_path }}/yougile.py" "${{ inputs.command }}"
+        fi

@@ -1,0 +1,22 @@
+# Thin caller: logic lives in XBusiness-IT/.github/.github/workflows/reusable-governance.yml
+# (PR title XIT-123, YouGile sync, tag/release guard, main-only-via-PR guard).
+name: Governance
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, ready_for_review, closed]
+  pull_request_review:
+    types: [submitted]
+  push:
+    branches: [main]
+  create:
+  release:
+    types: [published]
+
+jobs:
+  governance:
+    uses: XBusiness-IT/.github/.github/workflows/reusable-governance.yml@main
+    secrets: inherit
+    permissions:
+      contents: write
+      pull-requests: read
