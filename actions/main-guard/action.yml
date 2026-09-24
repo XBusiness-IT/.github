@@ -49,7 +49,9 @@ runs:
           echo "::error::PR #$pr was merged by $merged_by, allowed: $MANAGERS"
           exit 1
         fi
-        if [[ " $MANAGERS " != *" $author "* ]]; then
+        # PRs opened by our own workflows (release PR from "Promote QA to Prod", which only a manager
+        # can run) cannot be approved by that manager on GitHub - a manager's merge is the approval.
+        if [[ " $MANAGERS " != *" $author "* && "$author" != "github-actions[bot]" ]]; then
           approved="$(gh api "repos/$REPO/pulls/$pr/reviews" \
             --jq "[.[] | select(.state == \"APPROVED\") | .user.login] | map(select(\" $MANAGERS \" | contains(\" \" + . + \" \"))) | length")"
           if [[ "$approved" == "0" ]]; then
