@@ -26,7 +26,7 @@ jobs:
   pr-title:
     name: Validate YouGile task reference
     if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       # No checkout of PR code: pull_request_target has secrets, the PR must not run its own code here.
       - uses: XBusiness-IT/.github/actions/yougile@main
@@ -37,7 +37,7 @@ jobs:
   commits:
     name: Conventional commit messages
     if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
@@ -62,7 +62,7 @@ jobs:
        contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action)) ||
       (github.event_name == 'pull_request_review' &&
        contains(fromJSON('["approved","changes_requested"]'), github.event.review.state))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - id: msg
         env:
@@ -140,7 +140,7 @@ jobs:
       (github.event_name == 'pull_request_target' &&
        contains(fromJSON('["opened","reopened","ready_for_review","closed"]'), github.event.action)) ||
       github.event_name == 'pull_request_review'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: XBusiness-IT/.github/actions/yougile@main
         with:
@@ -150,7 +150,7 @@ jobs:
   release-guard:
     name: Only release managers may tag / release
     if: (github.event_name == 'create' && github.event.ref_type == 'tag') || github.event_name == 'release'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - id: check
         env:
@@ -187,7 +187,7 @@ jobs:
   main-guard:
     name: Main only via approved PR
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: XBusiness-IT/.github/actions/main-guard@main
         with:
@@ -209,7 +209,7 @@ jobs:
       github.event_name == 'pull_request_target' && github.event.action == 'closed' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       !contains(fromJSON('["main","master","qa-state"]'), github.event.pull_request.head.ref)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
