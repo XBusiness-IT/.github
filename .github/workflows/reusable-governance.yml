@@ -74,7 +74,10 @@ jobs:
           REPO: ${{ github.event.repository.name }}
           NUM: ${{ github.event.pull_request.number }}
           TASK_URL_PREFIX: ${{ vars.YOUGILE_TASK_URL_PREFIX }}  # repo variable; kept out of this public repo
+          TG_USERS: ${{ vars.TELEGRAM_USERNAMES }}
         run: |
+          # GitHub login -> Telegram username (repo variable TELEGRAM_USERNAMES, JSON); fallback: login.
+          tg() { python3 -c 'import json, sys; m = json.loads(sys.argv[2] or "{}"); sys.stdout.write(m.get(sys.argv[1], sys.argv[1]))' "$1" "$TG_USERS"; }
           # HTML for Telegram: user-provided text (PR title, logins) is escaped, links are hidden in text.
           esc() { python3 -c 'import html, sys; sys.stdout.write(html.escape(sys.argv[1], quote=False))' "$1"; }
           task=""
@@ -87,11 +90,11 @@ jobs:
             fi
           fi
           if [[ "$EVENT" == pull_request_review && "$STATE" == approved ]]; then
-            head="👍 <b>Одобрено — можно вливать</b> (@$(esc "$REVIEWER"))"
+            head="👍 <b>Одобрено — можно вливать</b> (@$(esc "$(tg "$REVIEWER")"))"
           elif [[ "$EVENT" == pull_request_review ]]; then
-            head="✏️ <b>Нужны доработки</b> (@$(esc "$REVIEWER"))"
+            head="✏️ <b>Нужны доработки</b> (@$(esc "$(tg "$REVIEWER")"))"
           else
-            head="👀 <b>Нужно ревью</b> (@$(esc "$AUTHOR"))"
+            head="👀 <b>Нужно ревью</b> (@$(esc "$(tg "$AUTHOR")"))"
           fi
           pr="<a href=\"${URL}\">$(esc "$REPO") #${NUM}</a>: $(esc "${TITLE#*: }")"
           {
@@ -133,7 +136,10 @@ jobs:
           TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.ref }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TG_USERS: ${{ vars.TELEGRAM_USERNAMES }}
         run: |
+          # GitHub login -> Telegram username (repo variable TELEGRAM_USERNAMES, JSON); fallback: login.
+          tg() { python3 -c 'import json, sys; m = json.loads(sys.argv[2] or "{}"); sys.stdout.write(m.get(sys.argv[1], sys.argv[1]))' "$1" "$TG_USERS"; }
           if [[ " $MANAGERS " == *" $ACTOR "* ]]; then
             echo "$TAG created by release manager $ACTOR"
             exit 0
@@ -143,7 +149,7 @@ jobs:
           if [[ -n "$release_id" ]]; then gh api -X DELETE "repos/$REPO/releases/$release_id" || true; fi
           gh api -X DELETE "repos/$REPO/git/refs/tags/$TAG" || true
           esc() { python3 -c 'import html, sys; sys.stdout.write(html.escape(sys.argv[1], quote=False))' "$1"; }
-          echo "text=⛔ <b>Тег/релиз без прав удалён</b>: @$(esc "$ACTOR") создал $(esc "$TAG") в $(esc "$REPO") · <a href=\"$RUN_URL\">лог</a>" >> "$GITHUB_OUTPUT"
+          echo "text=⛔ <b>Тег/релиз без прав удалён</b>: @$(esc "$(tg "$ACTOR")") создал $(esc "$TAG") в $(esc "$REPO") · <a href=\"$RUN_URL\">лог</a>" >> "$GITHUB_OUTPUT"
           exit 1
       - if: failure()
         uses: XBusiness-IT/.github/actions/telegram-notify@main
@@ -169,7 +175,7 @@ jobs:
           chat-id: ${{ secrets.SERVICE_BOT_CHAT_ID }}
           topic-id: ${{ secrets.SERVICE_BOT_TOPIC_QA }}
           parse-mode: HTML
-          text: "⚠️ <b>В main попал коммит не через approved PR</b> — на QA не поедет\n<a href=\"${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}\">${{ github.event.repository.name }}</a> · push от @${{ github.actor }}"
+          text: "⚠️ <b>В main попал коммит не через approved PR</b> — на QA не поедет\n<a href=\"${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}\">${{ github.event.repository.name }}</a> · push от @${{ fromJSON(vars.TELEGRAM_USERNAMES || '{}')[github.actor] || github.actor }}"
 
   delete-branch:
     name: Delete head branch of a closed PR
