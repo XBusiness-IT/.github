@@ -28,6 +28,9 @@ from typing import Any
 BASE_URL = os.environ.get("YOUGILE_BASE_URL", "https://ru.yougile.com/api-v2").rstrip("/")
 PREFIX = os.environ.get("TASK_PREFIX", "XIT")
 TITLE_RE = re.compile(rf"^({PREFIX}-\d+): \S.*")
+CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+# YouGile API cannot create real mentions, so the reviewer is tagged as plain text.
+REVIEWER = os.environ.get("YOUGILE_REVIEWER", "@Михаил")
 
 
 def fail(msg: str) -> None:
@@ -89,7 +92,9 @@ def cmd_check(_: argparse.Namespace) -> None:
     title = event["pull_request"]["title"]
     code = task_code(title)
     if not code:
-        fail(f"PR title must look like '{PREFIX}-123: Short description', got: {title!r}")
+        fail(f"Название PR должно быть вида '{PREFIX}-123: Короткое описание', сейчас: {title!r}")
+    if not CYRILLIC_RE.search(title.split(":", 1)[1]):
+        fail(f"Название PR пишется на русском: '{PREFIX}-123: Добавить …', сейчас: {title!r}")
     if not os.environ.get("YOUGILE_API_KEY"):
         print(f"::warning::YOUGILE_API_KEY is not set - only the title format of {code} was checked")
         return
@@ -122,7 +127,10 @@ def describe(event_name: str, event: dict) -> str | None:
         return f"📝 Открыт draft-PR ({pr['user']['login']})\n{head}"
     if action in ("opened", "reopened", "ready_for_review"):
         verb = {"opened": "Открыт", "reopened": "Переоткрыт", "ready_for_review": "Готов к ревью"}[action]
-        return f"🔀 {verb} PR ({pr['user']['login']}, {pr['head']['ref']} → {pr['base']['ref']})\n{head}"
+        return (
+            f"🔀 {verb} PR ({pr['user']['login']}, {pr['head']['ref']} → {pr['base']['ref']})\n{head}\n\n"
+            f"👀 {REVIEWER}, нужно ревью"
+        )
     if action == "closed" and pr.get("merged"):
         by = (pr.get("merged_by") or {}).get("login", "?")
         sha = (pr.get("merge_commit_sha") or "")[:12]

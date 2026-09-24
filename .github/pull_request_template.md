@@ -1,13 +1,17 @@
-## YouGile task
+## Задача
 
-<!-- PR title must be: XIT-123: Short description -->
+<!-- Название PR: XIT-123: Что сделано (по-русски). Коммиты: feat: … / fix: … / chore: … -->
 
-- Task: XIT-
+- XIT-
 
-## What changed
+## Что сделано
 
+-
 
-## How it was tested
+## Как проверено
 
+-
 
-## Rollback
+## Откат
+
+-
