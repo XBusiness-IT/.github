@@ -11,13 +11,16 @@ CI/CD для всех репозиториев**:
 - `.github/workflows/reusable-governance.yml` — проверка `XIT-123` в названии PR, синк PR с YouGile,
   release-guard (теги/релизы только dym-dino), main-guard (main только через approved PR);
 - `.github/workflows/reusable-delivery.yml` — сборка образов в GHCR и заявка на QA-деплой;
-- `actions/telegram-notify`, `actions/yougile`, `actions/main-guard` — composite actions;
+- `actions/telegram-notify`, `actions/yougile`, `actions/main-guard`, `actions/run-queue` — composite actions;
   `actions/yougile` также двигает задачи по колонкам (`move`): PR готов к ревью → «Ревью»,
   выезд на QA (ci-cd-repo) → «готово к тестированию».
 
 Сообщения service-bot в Telegram — `parse-mode: HTML`: ссылки прячем в текст
 (`<a href="…">tg-bots #3</a>`), всё, что пришло от людей (названия PR, логины, теги), экранируем
 через `html.escape`. При ошибке разметки action сам переотправит сообщение простым текстом.
+
+Очередь запусков — только через `actions/run-queue`, **не через `concurrency`**: `concurrency` держит один
+ожидающий запуск и молча отменяет остальные (так терялись деплои после пачки merge).
 
 **Репозиторий публичный.** Никаких секретов, IP, хостов, внутренних URL, имён серверов.
 Остальные репозитории ссылаются на `@main`: изменение применяется ко всем сразу, поэтому

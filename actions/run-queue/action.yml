@@ -1,0 +1,43 @@
+name: Run queue
+description: >
+  Wait until every earlier run of the given workflow in this repository has finished.
+  Replaces `concurrency` groups, which keep only ONE pending run and silently cancel the others:
+  after a batch of merges that lost deploys and their PR information.
+  Needs `actions: read` for the token.
+
+inputs:
+  workflow:
+    description: Workflow file name, e.g. delivery.yml / deploy.yml
+    required: true
+  token:
+    required: false
+    default: ${{ github.token }}
+  poll-seconds:
+    required: false
+    default: "15"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        WORKFLOW: ${{ inputs.workflow }}
+        POLL: ${{ inputs.poll-seconds }}
+        REPO: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+      run: |
+        while :; do
+          if ! older="$(gh run list -R "$REPO" --workflow "$WORKFLOW" -L 50 --json databaseId,status \
+            --jq "[.[] | select(.databaseId < $RUN_ID and .status != \"completed\")] | map(.databaseId) | join(\" \")")"; then
+            # Fail open: a missing `actions: read` must not break the pipeline, only the ordering.
+            echo "::warning::Cannot list $WORKFLOW runs (token needs actions: read) - continuing without the queue"
+            break
+          fi
+          if [[ -z "$older" ]]; then
+            echo "No earlier $WORKFLOW runs in progress - go"
+            break
+          fi
+          echo "Waiting for earlier $WORKFLOW run(s): $older"
+          sleep "$POLL"
+        done
