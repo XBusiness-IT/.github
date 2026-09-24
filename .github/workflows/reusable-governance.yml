@@ -5,6 +5,7 @@
 #  - every PR commit follows Conventional Commits: feat: / fix: / chore: ...
 #  - PR ready for review / approved / changes requested -> Telegram alert with PR + task links
 #  - PR opened / approved / changes requested / merged -> message in the YouGile task chat
+#  - PR ready for review -> YouGile task moves to the «Ревью» column
 #  - tags and releases may only be created by release managers; others are deleted + alert
 #  - commits on main that did not come from a PR merged by a release manager -> alert
 name: Governance (reusable)
@@ -109,6 +110,29 @@ jobs:
           topic-id: ${{ secrets.SERVICE_BOT_TOPIC_REVIEW || secrets.SERVICE_BOT_TOPIC_QA }}
           text: ${{ steps.msg.outputs.text }}
           parse-mode: HTML
+
+  task-to-review:
+    name: Task to «Ревью» in YouGile
+    # PR is ready for review -> the task moves «Готово к работе» / «В работе» -> «Ревью».
+    # Column ids are repo variables (YOUGILE_COLUMN_*), kept out of this public repo.
+    if: >-
+      github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
+      contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action)
+    runs-on: ubuntu-24.04
+    steps:
+      - id: task
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [[ "$TITLE" =~ ^(XIT-[0-9]+): ]]; then echo "code=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.task.outputs.code != ''
+        uses: XBusiness-IT/.github/actions/yougile@main
+        with:
+          command: move
+          api-key: ${{ secrets.YOUGILE_API_KEY }}
+          task: ${{ steps.task.outputs.code }}
+          to-column: ${{ vars.YOUGILE_COLUMN_REVIEW }}
+          from-columns: ${{ vars.YOUGILE_COLUMN_READY }},${{ vars.YOUGILE_COLUMN_IN_PROGRESS }}
 
   yougile:
     name: Mirror PR event to YouGile

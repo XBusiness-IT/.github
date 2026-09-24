@@ -3,7 +3,7 @@ description: Validate PR task references and mirror PR events into YouGile task 
 
 inputs:
   command:
-    description: check | pr-event | message
+    description: check | pr-event | message | move
     required: true
   task:
     description: Task code for the message command (XIT-123)
@@ -11,6 +11,14 @@ inputs:
     default: ""
   text:
     description: Text for the message command
+    required: false
+    default: ""
+  to-column:
+    description: move - target column id
+    required: false
+    default: ""
+  from-columns:
+    description: move - comma-separated column ids the task must currently be in
     required: false
     default: ""
   api-key:
@@ -26,10 +34,15 @@ runs:
         YOUGILE_API_KEY: ${{ inputs.api-key }}
         YG_TASK: ${{ inputs.task }}
         YG_TEXT: ${{ inputs.text }}
+        YG_TO: ${{ inputs.to-column }}
+        YG_FROM: ${{ inputs.from-columns }}
       run: |
         if [[ "${{ inputs.command }}" == "message" ]]; then
           if [[ -z "$YOUGILE_API_KEY" || -z "$YG_TASK" ]]; then echo "YouGile message skipped"; exit 0; fi
           python3 "${{ github.action_path }}/yougile.py" message --task "$YG_TASK" --text "$YG_TEXT"
+        elif [[ "${{ inputs.command }}" == "move" ]]; then
+          if [[ -z "$YOUGILE_API_KEY" || -z "$YG_TASK" ]]; then echo "YouGile move skipped"; exit 0; fi
+          python3 "${{ github.action_path }}/yougile.py" move --task "$YG_TASK" --to "$YG_TO" --only-from "$YG_FROM"
         else
           python3 "${{ github.action_path }}/yougile.py" "${{ inputs.command }}"
         fi
