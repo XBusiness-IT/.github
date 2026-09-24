@@ -1,0 +1,66 @@
+name: Main guard
+description: >
+  Verify that a commit on main arrived through a merged pull request merged by a release manager.
+  Direct pushes (including admin bypass) fail this check, so they never reach QA/Prod.
+
+inputs:
+  sha:
+    description: Commit to verify
+    required: false
+    default: ${{ github.sha }}
+  managers:
+    description: Space separated GitHub logins allowed to merge into main
+    required: false
+    default: dym-dino
+  token:
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  pr-number:
+    description: Number of the merged PR
+    value: ${{ steps.check.outputs.pr }}
+  pr-title:
+    description: Title of the merged PR
+    value: ${{ steps.check.outputs.title }}
+
+runs:
+  using: composite
+  steps:
+    - id: check
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        SHA: ${{ inputs.sha }}
+        MANAGERS: ${{ inputs.managers }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        pr="$(gh api "repos/$REPO/commits/$SHA/pulls" \
+          --jq "[.[] | select(.merged_at != null and .merge_commit_sha == \"$SHA\")][0].number // empty")"
+        if [[ -z "$pr" ]]; then
+          echo "::error::$SHA is on main without a merged pull request (direct push). It will not be deployed."
+          exit 1
+        fi
+        merged_by="$(gh api "repos/$REPO/pulls/$pr" --jq '.merged_by.login')"
+        author="$(gh api "repos/$REPO/pulls/$pr" --jq '.user.login')"
+        title="$(gh api "repos/$REPO/pulls/$pr" --jq '.title')"
+        if [[ " $MANAGERS " != *" $merged_by "* ]]; then
+          echo "::error::PR #$pr was merged by $merged_by, allowed: $MANAGERS"
+          exit 1
+        fi
+        if [[ " $MANAGERS " != *" $author "* ]]; then
+          approved="$(gh api "repos/$REPO/pulls/$pr/reviews" \
+            --jq "[.[] | select(.state == \"APPROVED\") | .user.login] | map(select(\" $MANAGERS \" | contains(\" \" + . + \" \"))) | length")"
+          if [[ "$approved" == "0" ]]; then
+            echo "::error::PR #$pr by $author was merged without approval from: $MANAGERS"
+            exit 1
+          fi
+        fi
+        echo "PR #$pr ($title) merged by $merged_by"
+        {
+          echo "pr=$pr"
+          echo "title<<__EOF__"
+          echo "$title"
+          echo "__EOF__"
+        } >> "$GITHUB_OUTPUT"

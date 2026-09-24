@@ -1,0 +1,44 @@
+name: Telegram notify
+description: Send a message to the service-bot chat topic (QA or PROD). Skips silently when the token is not configured.
+
+inputs:
+  token:
+    description: Service bot token (secrets.SERVICE_BOT_TOKEN)
+    required: false
+    default: ""
+  chat-id:
+    description: Supergroup id (secrets.SERVICE_BOT_CHAT_ID); -100 prefix is added when missing
+    required: false
+    default: ""
+  topic-id:
+    description: Forum topic id (secrets.SERVICE_BOT_TOPIC_QA / SERVICE_BOT_TOPIC_PROD)
+    required: false
+    default: ""
+  text:
+    description: Message text (plain text, no markup)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        TG_TOKEN: ${{ inputs.token }}
+        TG_CHAT_ID: ${{ inputs.chat-id }}
+        TG_TOPIC_ID: ${{ inputs.topic-id }}
+        TG_TEXT: ${{ inputs.text }}
+      run: |
+        if [[ -z "$TG_TOKEN" || -z "$TG_CHAT_ID" ]]; then
+          echo "::warning::SERVICE_BOT_TOKEN / SERVICE_BOT_CHAT_ID are not configured - Telegram message skipped"
+          exit 0
+        fi
+        if [[ "$TG_CHAT_ID" =~ ^-?[0-9]+$ && "$TG_CHAT_ID" != -100* ]]; then
+          TG_CHAT_ID="-100${TG_CHAT_ID#-}"
+        fi
+        args=(--data-urlencode "chat_id=${TG_CHAT_ID}" --data-urlencode "text=${TG_TEXT}"
+              --data-urlencode "disable_web_page_preview=true")
+        if [[ -n "$TG_TOPIC_ID" ]]; then
+          args+=(--data-urlencode "message_thread_id=${TG_TOPIC_ID}")
+        fi
+        curl --fail-with-body --silent --show-error --retry 3 --output /dev/null \
+          -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" "${args[@]}"

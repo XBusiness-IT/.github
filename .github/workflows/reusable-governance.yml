@@ -1,0 +1,93 @@
+# Reusable governance workflow for every XBusiness-IT repository.
+# Callers: .github/workflows/governance.yml in each repo (see AGENTS.md).
+#
+#  - PR title must be "XIT-123: ..." and the YouGile task must exist
+#  - PR opened / approved / changes requested / merged -> message in the YouGile task chat
+#  - tags and releases may only be created by release managers; others are deleted + alert
+#  - commits on main that did not come from a PR merged by a release manager -> alert
+name: Governance (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      managers:
+        description: Space separated GitHub logins allowed to merge, tag and release
+        type: string
+        default: dym-dino
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  pr-title:
+    name: Validate YouGile task reference
+    if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      # No checkout of PR code: pull_request_target has secrets, the PR must not run its own code here.
+      - uses: XBusiness-IT/.github/actions/yougile@main
+        with:
+          command: check
+          api-key: ${{ secrets.YOUGILE_API_KEY }}
+
+  yougile:
+    name: Mirror PR event to YouGile
+    if: >-
+      (github.event_name == 'pull_request_target' &&
+       contains(fromJSON('["opened","reopened","ready_for_review","closed"]'), github.event.action)) ||
+      github.event_name == 'pull_request_review'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: XBusiness-IT/.github/actions/yougile@main
+        with:
+          command: pr-event
+          api-key: ${{ secrets.YOUGILE_API_KEY }}
+
+  release-guard:
+    name: Only release managers may tag / release
+    if: (github.event_name == 'create' && github.event.ref_type == 'tag') || github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANAGERS: ${{ inputs.managers }} github-actions[bot]
+          ACTOR: ${{ github.event_name == 'release' && github.event.release.author.login || github.actor }}
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.ref }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ " $MANAGERS " == *" $ACTOR "* ]]; then
+            echo "$TAG created by release manager $ACTOR"
+            exit 0
+          fi
+          echo "::error::$ACTOR is not allowed to create tag/release $TAG - deleting"
+          release_id="$(gh api "repos/$REPO/releases/tags/$TAG" --jq .id 2>/dev/null || true)"
+          if [[ -n "$release_id" ]]; then gh api -X DELETE "repos/$REPO/releases/$release_id" || true; fi
+          gh api -X DELETE "repos/$REPO/git/refs/tags/$TAG" || true
+          echo "text=⛔ $ACTOR создал тег/релиз $TAG в $REPO без прав. Тег и релиз удалены. $RUN_URL" >> "$GITHUB_OUTPUT"
+          exit 1
+      - if: failure()
+        uses: XBusiness-IT/.github/actions/telegram-notify@main
+        with:
+          token: ${{ secrets.SERVICE_BOT_TOKEN }}
+          chat-id: ${{ secrets.SERVICE_BOT_CHAT_ID }}
+          topic-id: ${{ secrets.SERVICE_BOT_TOPIC_PROD }}
+          text: ${{ steps.check.outputs.text || format('⛔ Нарушение политики тегов в {0}', github.repository) }}
+
+  main-guard:
+    name: Main only via approved PR
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: XBusiness-IT/.github/actions/main-guard@main
+        with:
+          managers: ${{ inputs.managers }}
+      - if: failure()
+        uses: XBusiness-IT/.github/actions/telegram-notify@main
+        with:
+          token: ${{ secrets.SERVICE_BOT_TOKEN }}
+          chat-id: ${{ secrets.SERVICE_BOT_CHAT_ID }}
+          topic-id: ${{ secrets.SERVICE_BOT_TOPIC_QA }}
+          text: "⚠️ В main ${{ github.repository }} попал коммит ${{ github.sha }} не через approved PR (push от ${{ github.actor }}). ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
