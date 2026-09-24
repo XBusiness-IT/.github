@@ -5,6 +5,7 @@ Commands:
   check     validate that the PR title references an existing, live YouGile task
   pr-event  post the PR / review / merge event into the task chat
   message   post an arbitrary text into the chat of the task given by --task
+  move      move the task to column --to if it is in one of --only-from
 
 Environment:
   YOUGILE_API_KEY   key of the technical YouGile user (required for network calls)
@@ -184,6 +185,26 @@ def cmd_message(args: argparse.Namespace) -> None:
     post(task["id"], args.text)
 
 
+def cmd_move(args: argparse.Namespace) -> None:
+    """Move a task to another column, but only if it is currently in one of --only-from."""
+    if not args.to:
+        print("::warning::target column is not configured - move skipped")
+        return
+    task = find_task(args.task)
+    if not task:
+        print(f"::warning::YouGile task {args.task} not found - move skipped")
+        return
+    allowed = [c for c in (args.only_from or "").split(",") if c]
+    if task.get("columnId") == args.to:
+        print(f"{args.task} is already in the target column")
+        return
+    if allowed and task.get("columnId") not in allowed:
+        print(f"{args.task} is in another column - left as is")
+        return
+    api("PUT", f"/tasks/{task['id']}", {"columnId": args.to})
+    print(f"{args.task} moved")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -193,6 +214,11 @@ def main() -> None:
     msg.add_argument("--task", required=True)
     msg.add_argument("--text", required=True)
     msg.set_defaults(func=cmd_message)
+    mv = sub.add_parser("move")
+    mv.add_argument("--task", required=True)
+    mv.add_argument("--to", default="", help="target column id")
+    mv.add_argument("--only-from", default="", help="comma-separated column ids the task must be in")
+    mv.set_defaults(func=cmd_move)
     args = parser.parse_args()
     try:
         args.func(args)
