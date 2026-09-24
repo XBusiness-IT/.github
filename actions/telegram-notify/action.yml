@@ -15,8 +15,14 @@ inputs:
     required: false
     default: ""
   text:
-    description: Message text (plain text, no markup)
+    description: >
+      Message text. With parse-mode HTML only <b>, <i>, <a href>, <code> are used and any text
+      coming from users (PR titles etc.) must be escaped with the html-escape action first.
     required: true
+  parse-mode:
+    description: Empty for plain text, or HTML
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -27,6 +33,7 @@ runs:
         TG_CHAT_ID: ${{ inputs.chat-id }}
         TG_TOPIC_ID: ${{ inputs.topic-id }}
         TG_TEXT: ${{ inputs.text }}
+        TG_PARSE_MODE: ${{ inputs.parse-mode }}
       run: |
         if [[ -z "$TG_TOKEN" || -z "$TG_CHAT_ID" ]]; then
           echo "::warning::SERVICE_BOT_TOKEN / SERVICE_BOT_CHAT_ID are not configured - Telegram message skipped"
@@ -40,5 +47,14 @@ runs:
         if [[ -n "$TG_TOPIC_ID" ]]; then
           args+=(--data-urlencode "message_thread_id=${TG_TOPIC_ID}")
         fi
-        curl --fail-with-body --silent --show-error --retry 3 --output /dev/null \
-          -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" "${args[@]}"
+        send() {
+          curl --fail-with-body --silent --show-error --retry 3 --output /dev/null \
+            -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" "${args[@]}" "$@"
+        }
+        if [[ -z "$TG_PARSE_MODE" ]]; then
+          send
+        elif ! send --data-urlencode "parse_mode=${TG_PARSE_MODE}"; then
+          # Broken markup must never swallow an alert: resend the same text without parse_mode.
+          echo "::warning::Telegram rejected the ${TG_PARSE_MODE} message, resending as plain text"
+          send
+        fi
