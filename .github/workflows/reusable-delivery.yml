@@ -22,21 +22,24 @@ on:
         default: dym-dino
 
 permissions:
+  actions: read
   contents: read
   packages: write
   pull-requests: read
 
-concurrency:
-  group: delivery-${{ github.repository }}
-  cancel-in-progress: false
-
 jobs:
   guard:
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     outputs:
       pr: ${{ steps.guard.outputs.pr-number }}
       title: ${{ steps.guard.outputs.pr-title }}
     steps:
+      # Strict order per repo (an older commit must never reach QA after a newer one) and
+      # no cancelled runs: every merged PR is built, reported and moved in YouGile.
+      - uses: XBusiness-IT/.github/actions/run-queue@main
+        with:
+          workflow: delivery.yml
       - id: guard
         uses: XBusiness-IT/.github/actions/main-guard@main
         with:
