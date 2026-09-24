@@ -16,7 +16,7 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if [[ ! "$PR_TITLE" =~ ^MIN-[0-9]+:\ .+ ]]; then
-            echo "::error::PR title must match: MIN-123: Short description"
+          if [[ ! "$PR_TITLE" =~ ^XIT-[0-9]+:\ .+ ]]; then
+            echo "::error::PR title must match: XIT-123: Short description"
             exit 1
           fi

@@ -1,8 +1,8 @@
 ## YouGile task
 
-<!-- PR title must be: MIN-123: Short description -->
+<!-- PR title must be: XIT-123: Short description -->
 
-- Task: MIN-
+- Task: XIT-
 
 ## What changed
 
