@@ -6,8 +6,12 @@
 #  - PR ready for review / approved / changes requested -> Telegram alert with PR + task links
 #  - PR opened / approved / changes requested / merged -> message in the YouGile task chat
 #  - PR ready for review -> YouGile task moves to the «Ревью» column
+#  - PR closed -> its head branch is deleted
 #  - tags and releases may only be created by release managers; others are deleted + alert
 #  - commits on main that did not come from a PR merged by a release manager -> alert
+#
+# Actions minutes: every job is billed at least one minute, so everything triggered by a PR event
+# runs as steps of ONE job (`pr`) instead of six tiny jobs.
 name: Governance (reusable)
 
 on:
@@ -23,23 +27,30 @@ permissions:
   pull-requests: read
 
 jobs:
-  pr-title:
-    name: Validate YouGile task reference
-    if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
+  pr:
+    name: PR checks and notifications
+    # A plain review comment (state "commented") has nothing to do - do not spend a job minute on it.
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event_name == 'pull_request_review' &&
+       contains(fromJSON('["approved","changes_requested"]'), github.event.review.state))
     runs-on: ubuntu-24.04
+    env:
+      IS_TARGET: ${{ github.event_name == 'pull_request_target' }}
+      ACTION: ${{ github.event.action }}
+      TITLE: ${{ github.event.pull_request.title }}
     steps:
       # No checkout of PR code: pull_request_target has secrets, the PR must not run its own code here.
-      - uses: XBusiness-IT/.github/actions/yougile@main
+      - name: Validate YouGile task reference
+        if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
+        uses: XBusiness-IT/.github/actions/yougile@main
         with:
           command: check
           api-key: ${{ secrets.YOUGILE_API_KEY }}
 
-  commits:
-    name: Conventional commit messages
-    if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
-    runs-on: ubuntu-24.04
-    steps:
-      - env:
+      - name: Conventional commit messages
+        if: always() && github.event_name == 'pull_request_target' && github.event.action != 'closed'
+        env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
@@ -55,22 +66,25 @@ jobs:
           done < <(gh api --paginate "repos/$REPO/pulls/$PR/commits" --jq '.[].commit.message | split("\n")[0]')
           exit $bad
 
-  review-alert:
-    name: Telegram review alert
-    if: >-
-      (github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
-       contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action)) ||
-      (github.event_name == 'pull_request_review' &&
-       contains(fromJSON('["approved","changes_requested"]'), github.event.review.state))
-    runs-on: ubuntu-24.04
-    steps:
-      - id: msg
+      - name: Task code
+        id: task
+        if: always()
+        run: |
+          if [[ "$TITLE" =~ ^(XIT-[0-9]+): ]]; then echo "code=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Telegram review alert — text
+        id: msg
+        if: >-
+          always() &&
+          ((github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
+            contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action)) ||
+           (github.event_name == 'pull_request_review' &&
+            contains(fromJSON('["approved","changes_requested"]'), github.event.review.state)))
         env:
           EVENT: ${{ github.event_name }}
           STATE: ${{ github.event.review.state }}
           REVIEWER: ${{ github.event.review.user.login }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
-          TITLE: ${{ github.event.pull_request.title }}
           URL: ${{ github.event.pull_request.html_url }}
           REPO: ${{ github.event.repository.name }}
           NUM: ${{ github.event.pull_request.number }}
@@ -103,7 +117,10 @@ jobs:
             printf '%s\n%s\n%s\n' "$head" "$pr" "$task"
             echo "__EOF__"
           } >> "$GITHUB_OUTPUT"
-      - uses: XBusiness-IT/.github/actions/telegram-notify@main
+
+      - name: Telegram review alert — send
+        if: always() && steps.msg.outputs.text != ''
+        uses: XBusiness-IT/.github/actions/telegram-notify@main
         with:
           token: ${{ secrets.SERVICE_BOT_TOKEN }}
           chat-id: ${{ secrets.SERVICE_BOT_CHAT_ID }}
@@ -111,21 +128,13 @@ jobs:
           text: ${{ steps.msg.outputs.text }}
           parse-mode: HTML
 
-  task-to-review:
-    name: Task to «Ревью» in YouGile
-    # PR is ready for review -> the task moves «Готово к работе» / «В работе» -> «Ревью».
-    # Column ids are repo variables (YOUGILE_COLUMN_*), kept out of this public repo.
-    if: >-
-      github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
-      contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action)
-    runs-on: ubuntu-24.04
-    steps:
-      - id: task
-        env:
-          TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          if [[ "$TITLE" =~ ^(XIT-[0-9]+): ]]; then echo "code=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"; fi
-      - if: steps.task.outputs.code != ''
+      # PR is ready for review -> the task moves «Готово к работе» / «В работе» -> «Ревью».
+      # Column ids are repo variables (YOUGILE_COLUMN_*), kept out of this public repo.
+      - name: Task to «Ревью» in YouGile
+        if: >-
+          always() && steps.task.outputs.code != '' &&
+          github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
+          contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action)
         uses: XBusiness-IT/.github/actions/yougile@main
         with:
           command: move
@@ -134,18 +143,40 @@ jobs:
           to-column: ${{ vars.YOUGILE_COLUMN_REVIEW }}
           from-columns: ${{ vars.YOUGILE_COLUMN_READY }},${{ vars.YOUGILE_COLUMN_IN_PROGRESS }}
 
-  yougile:
-    name: Mirror PR event to YouGile
-    if: >-
-      (github.event_name == 'pull_request_target' &&
-       contains(fromJSON('["opened","reopened","ready_for_review","closed"]'), github.event.action)) ||
-      github.event_name == 'pull_request_review'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: XBusiness-IT/.github/actions/yougile@main
+      - name: Mirror PR event to YouGile
+        if: >-
+          always() &&
+          ((github.event_name == 'pull_request_target' &&
+            contains(fromJSON('["opened","reopened","ready_for_review","closed"]'), github.event.action)) ||
+           github.event_name == 'pull_request_review')
+        uses: XBusiness-IT/.github/actions/yougile@main
         with:
           command: pr-event
           api-key: ${{ secrets.YOUGILE_API_KEY }}
+
+      # GitHub deletes merged branches itself (delete_branch_on_merge); this also covers PRs closed
+      # without merge. Fork branches and protected names are never touched.
+      - name: Delete head branch of a closed PR
+        if: >-
+          always() &&
+          github.event_name == 'pull_request_target' && github.event.action == 'closed' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          !contains(fromJSON('["main","master","qa-state"]'), github.event.pull_request.head.ref)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          open="$(gh api "repos/$REPO/pulls?state=open&head=${REPO%%/*}:$BRANCH" --jq length)"
+          if [[ "$open" != "0" ]]; then
+            echo "Another open PR still uses $BRANCH - keeping it"
+            exit 0
+          fi
+          if gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH" 2>/dev/null; then
+            echo "Deleted $BRANCH"
+          else
+            echo "$BRANCH already deleted"
+          fi
 
   release-guard:
     name: Only release managers may tag / release
@@ -200,29 +231,3 @@ jobs:
           topic-id: ${{ secrets.SERVICE_BOT_TOPIC_QA }}
           parse-mode: HTML
           text: "⚠️ <b>В main попал коммит не через approved PR</b> — на QA не поедет\n<a href=\"${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}\">${{ github.event.repository.name }}</a> · push от @${{ fromJSON(vars.TELEGRAM_USERNAMES || '{}')[github.actor] || github.actor }}"
-
-  delete-branch:
-    name: Delete head branch of a closed PR
-    # GitHub deletes merged branches itself (delete_branch_on_merge); this also covers PRs closed
-    # without merge. Fork branches and protected names are never touched.
-    if: >-
-      github.event_name == 'pull_request_target' && github.event.action == 'closed' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      !contains(fromJSON('["main","master","qa-state"]'), github.event.pull_request.head.ref)
-    runs-on: ubuntu-24.04
-    steps:
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          BRANCH: ${{ github.event.pull_request.head.ref }}
-        run: |
-          open="$(gh api "repos/$REPO/pulls?state=open&head=${REPO%%/*}:$BRANCH" --jq length)"
-          if [[ "$open" != "0" ]]; then
-            echo "Another open PR still uses $BRANCH - keeping it"
-            exit 0
-          fi
-          if gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH" 2>/dev/null; then
-            echo "Deleted $BRANCH"
-          else
-            echo "$BRANCH already deleted"
-          fi
