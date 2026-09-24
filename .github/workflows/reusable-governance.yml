@@ -91,3 +91,29 @@ jobs:
           chat-id: ${{ secrets.SERVICE_BOT_CHAT_ID }}
           topic-id: ${{ secrets.SERVICE_BOT_TOPIC_QA }}
           text: "⚠️ В main ${{ github.repository }} попал коммит ${{ github.sha }} не через approved PR (push от ${{ github.actor }}). ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+
+  delete-branch:
+    name: Delete head branch of a closed PR
+    # GitHub deletes merged branches itself (delete_branch_on_merge); this also covers PRs closed
+    # without merge. Fork branches and protected names are never touched.
+    if: >-
+      github.event_name == 'pull_request_target' && github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !contains(fromJSON('["main","master","qa-state"]'), github.event.pull_request.head.ref)
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          open="$(gh api "repos/$REPO/pulls?state=open&head=${REPO%%/*}:$BRANCH" --jq length)"
+          if [[ "$open" != "0" ]]; then
+            echo "Another open PR still uses $BRANCH - keeping it"
+            exit 0
+          fi
+          if gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH" 2>/dev/null; then
+            echo "Deleted $BRANCH"
+          else
+            echo "$BRANCH already deleted"
+          fi
