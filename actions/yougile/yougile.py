@@ -21,6 +21,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -31,6 +32,10 @@ TITLE_RE = re.compile(rf"^({PREFIX}-\d+): \S.*")
 CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 # YouGile API cannot create real mentions, so the reviewer is tagged as plain text.
 REVIEWER = os.environ.get("YOUGILE_REVIEWER", "@Михаил")
+
+
+class YouGileUnavailable(Exception):
+    """YouGile did not answer (timeout / 5xx) after retries."""
 
 
 def fail(msg: str) -> None:
@@ -51,12 +56,22 @@ def api(method: str, path: str, body: Any | None = None) -> Any:
             "Accept": "application/json",
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode()
-            return json.loads(raw) if raw else None
-    except urllib.error.HTTPError as e:
-        fail(f"YouGile {method} {path} -> HTTP {e.code}: {e.read().decode(errors='replace')[:300]}")
+    # Reads are retried; a POST is sent once (a retry after a read timeout could duplicate the message).
+    attempts = 3 if method == "GET" else 1
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read().decode()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as e:
+            if e.code < 500 and e.code != 429:
+                fail(f"YouGile {method} {path} -> HTTP {e.code}: {e.read().decode(errors='replace')[:300]}")
+            error = f"HTTP {e.code}"
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            error = str(e)
+        if attempt < attempts:
+            time.sleep(5 * attempt)
+    raise YouGileUnavailable(f"YouGile {method} {path}: {error}")
 
 
 def find_task(code: str) -> dict | None:
@@ -179,7 +194,11 @@ def main() -> None:
     msg.add_argument("--text", required=True)
     msg.set_defaults(func=cmd_message)
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except YouGileUnavailable as e:
+        # An outage of YouGile must not block PRs or deploys: the title format is already checked.
+        print(f"::warning::YouGile недоступен, шаг пропущен: {e}")
 
 
 if __name__ == "__main__":
