@@ -94,11 +94,13 @@ feature-ветка → PR (CI + XIT-проверка) → merge в main (dym-din
   → ci-cd-repo: deploy-qa → QA (healthchecks, авто-откат) → smoke-автотесты
   любой сбой после merge → алерт в Telegram, топик QA
 
-QA → «Promote QA to Prod» (infra) → PR с infra/releases/prod.env → merge
-  → dym-dino публикует Release prod-vYYYY.MM.DD.N в infra → ci-cd-repo: deploy-prod → PROD
+QA → «Promote QA to Prod» (infra) → PR с infra/releases/prod.env → merge dym-dino
+  → infra/release-on-merge.yml создаёт тег и Release prod-vYYYY.MM.DD.N
+  → ci-cd-repo: deploy-prod → PROD
 ```
 
-- **Прод никогда не деплоится из `main`.** Только релиз `prod-v*` в `infra`, опубликованный dym-dino.
+- **Прод никогда не деплоится просто из `main`.** Только релиз `prod-v*` в `infra`, который
+  автоматика создаёт после merge release-PR пользователем dym-dino (ручной Release — fallback).
 - Один и тот же образ (digest) проходит QA → Prod; на серверах ничего не собирается.
 - Откат прода: ci-cd-repo → Actions → Deploy → Run workflow, `environment=prod`,
   `tag=<предыдущий prod-v*>` (только dym-dino). Если healthchecks не прошли,
@@ -107,12 +109,12 @@ QA → «Promote QA to Prod» (infra) → PR с infra/releases/prod.env → merg
 
 ## Осторожно
 
-- **Миграции БД — только обратно совместимые** (expand → contract): сначала добавляем
-  колонку/таблицу, код переходит на неё, удаление старого — отдельным следующим релизом.
-  Откат меняет образы, но не схему БД.
-- Новый сервис/контейнер = Dockerfile с `USER` не-root + healthcheck + запись `image:` и
-  лимиты в `infra` + переменная образа в `delivery.yml`. Сообщи об этом в PR.
-- Новая переменная окружения → `.env.example` + описание в PR (значения для QA/Prod задаёт человек).
+- Все вызывающие репозитории используют reusable-компоненты через `@main`: сохраняй обратную
+  совместимость входов, outputs и имён jobs/status checks.
+- Новое обязательное поле сначала добавляется как необязательное с безопасным default. Ломающее
+  изменение выпускается отдельной версией workflow/action и мигрируется по репозиториям постепенно.
+- Изменение Telegram/YouGile-интеграции не должно блокировать PR или деплой при недоступности
+  внешнего сервиса; обязательными остаются только локально проверяемые policy-условия.
 
 ## Секреты и данные
 
@@ -134,5 +136,5 @@ QA → «Promote QA to Prod» (infra) → PR с infra/releases/prod.env → merg
 
 ```bash
 python -m py_compile actions/yougile/yougile.py
-docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -color
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -color
 ```
