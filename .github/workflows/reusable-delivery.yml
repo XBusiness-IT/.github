@@ -138,3 +138,55 @@ jobs:
             -H "Authorization: Bearer ${TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -d "$payload"
+
+  cleanup-registry:
+    # Old image versions pile up in GHCR after every merge. Keep the newest 20 versions and anything
+    # younger than 30 days; NEVER delete what QA, pending QA, prod or the last 5 prod releases use.
+    needs: request-qa-deploy
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Collect digests in use
+        env:
+          TOKEN: ${{ secrets.CICD_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          get() { curl -fsS -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/XBusiness-IT/$1"; }
+          raw() { get "$1" || true; }
+          # Mandatory manifests: if they cannot be read, the step fails and nothing is deleted.
+          get "ci-cd-repo/contents/qa.env?ref=qa-state" > qa.env
+          get "infra/contents/releases/prod.env?ref=main" > prod.env
+          {
+            cat qa.env prod.env
+            raw "ci-cd-repo/contents/qa-pending.env?ref=qa-state"
+            for tag in $(curl -fsS -H "Authorization: Bearer $TOKEN" \
+                "https://api.github.com/repos/XBusiness-IT/infra/tags?per_page=100" \
+                | jq -r '[.[].name | select(startswith("prod-v"))] | sort | reverse | .[:5][]'); do
+              raw "infra/contents/releases/prod.env?ref=$tag"
+            done
+          } | grep -oE 'sha256:[0-9a-f]{64}' | sort -u > protected.txt
+          echo "protected digests: $(wc -l < protected.txt)"
+          # Without the manifests we cannot tell what is in use - then delete nothing.
+          [[ -s protected.txt ]] || { echo "::warning::no protected digests found, skipping cleanup"; exit 1; }
+      - name: Delete old versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGES: ${{ inputs.images }}
+        run: |
+          set -euo pipefail
+          cutoff="$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          for name in $(jq -r '.[].name' <<<"$IMAGES" | sort -u); do
+            gh api --paginate "orgs/XBusiness-IT/packages/container/$name/versions?per_page=100" \
+              --jq '.[] | [.id, .name, .created_at] | @tsv' | sort -t$'\t' -k3 -r > versions.tsv
+            deleted=0
+            n=0
+            while IFS=$'\t' read -r id digest created; do
+              n=$((n + 1))
+              (( n <= 20 )) && continue
+              [[ "$created" > "$cutoff" ]] && continue
+              grep -qx "$digest" protected.txt && continue
+              gh api -X DELETE "orgs/XBusiness-IT/packages/container/$name/versions/$id" >/dev/null
+              deleted=$((deleted + 1))
+            done < versions.tsv
+            echo "$name: $(wc -l < versions.tsv) versions, deleted $deleted"
+          done

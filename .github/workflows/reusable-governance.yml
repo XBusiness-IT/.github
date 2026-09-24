@@ -1,7 +1,9 @@
 # Reusable governance workflow for every XBusiness-IT repository.
 # Callers: .github/workflows/governance.yml in each repo (see AGENTS.md).
 #
-#  - PR title must be "XIT-123: ..." and the YouGile task must exist
+#  - PR title must be "XIT-123: Описание на русском" and the YouGile task must exist
+#  - every PR commit follows Conventional Commits: feat: / fix: / chore: ...
+#  - PR ready for review / approved / changes requested -> Telegram alert with PR + task links
 #  - PR opened / approved / changes requested / merged -> message in the YouGile task chat
 #  - tags and releases may only be created by release managers; others are deleted + alert
 #  - commits on main that did not come from a PR merged by a release manager -> alert
@@ -30,6 +32,72 @@ jobs:
         with:
           command: check
           api-key: ${{ secrets.YOUGILE_API_KEY }}
+
+  commits:
+    name: Conventional commit messages
+    if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          types='feat|fix|chore|docs|refactor|test|ci|build|perf|style|revert'
+          bad=0
+          while IFS= read -r subject; do
+            [[ -z "$subject" || "$subject" == Merge* ]] && continue
+            if [[ ! "$subject" =~ ^($types)(\([a-z0-9._-]+\))?!?:\ .+ ]]; then
+              echo "::error::Коммит не по формату 'feat: …' / 'fix: …' / 'chore: …': $subject"
+              bad=1
+            fi
+          done < <(gh api --paginate "repos/$REPO/pulls/$PR/commits" --jq '.[].commit.message | split("\n")[0]')
+          exit $bad
+
+  review-alert:
+    name: Telegram review alert
+    if: >-
+      (github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
+       contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action)) ||
+      (github.event_name == 'pull_request_review' &&
+       contains(fromJSON('["approved","changes_requested"]'), github.event.review.state))
+    runs-on: ubuntu-latest
+    steps:
+      - id: msg
+        env:
+          EVENT: ${{ github.event_name }}
+          STATE: ${{ github.event.review.state }}
+          REVIEWER: ${{ github.event.review.user.login }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          TITLE: ${{ github.event.pull_request.title }}
+          URL: ${{ github.event.pull_request.html_url }}
+          REPO: ${{ github.event.repository.name }}
+          NUM: ${{ github.event.pull_request.number }}
+          TASK_URL_PREFIX: ${{ vars.YOUGILE_TASK_URL_PREFIX }}  # repo variable; kept out of this public repo
+        run: |
+          task=""
+          if [[ "$TITLE" =~ ^(XIT-[0-9]+): ]]; then
+            code="${BASH_REMATCH[1]}"
+            task="Задача: ${code}${TASK_URL_PREFIX:+ ${TASK_URL_PREFIX}${code}}"
+          fi
+          if [[ "$EVENT" == pull_request_review && "$STATE" == approved ]]; then
+            head="👍 $REVIEWER одобрил PR — можно вливать"
+          elif [[ "$EVENT" == pull_request_review ]]; then
+            head="✏️ $REVIEWER просит доработать PR"
+          else
+            head="👀 Нужно ревью ($AUTHOR)"
+          fi
+          {
+            echo "text<<__EOF__"
+            printf '%s\n%s #%s: %s\n%s\n%s\n' "$head" "$REPO" "$NUM" "$TITLE" "$URL" "$task"
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
+      - uses: XBusiness-IT/.github/actions/telegram-notify@main
+        with:
+          token: ${{ secrets.SERVICE_BOT_TOKEN }}
+          chat-id: ${{ secrets.SERVICE_BOT_CHAT_ID }}
+          topic-id: ${{ secrets.SERVICE_BOT_TOPIC_REVIEW || secrets.SERVICE_BOT_TOPIC_QA }}
+          text: ${{ steps.msg.outputs.text }}
 
   yougile:
     name: Mirror PR event to YouGile
